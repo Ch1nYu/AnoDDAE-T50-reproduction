@@ -1,0 +1,2 @@
+dataset,original_AP,original_ROC_AUC,trim10_AP,trim10_ROC_AUC,centroid_AP,centroid_ROC_AUC
+mean57,24.84547270,70.13041537,32.77209953,73.27890068,32.69923096,71.94810201

@@ -1,0 +1,81 @@
+{
+ "A_mean57": {
+  "original_AP": 24.887181025576712,
+  "original_ROC_AUC": 70.16906862616953,
+  "trim10_AP": 32.65441405132206,
+  "trim10_ROC_AUC": 73.23492620683852,
+  "randtrim10_AP": 25.21767853670783,
+  "randtrim10_ROC_AUC": 70.74236878701713,
+  "oracle10_AP": 49.66560643465555,
+  "oracle10_ROC_AUC": 82.87100191457971,
+  "centroid_AP": 32.69923095664079,
+  "centroid_ROC_AUC": 71.9481020085065
+ },
+ "A_gap_closed_AP": 0.31346757905364814,
+ "B": {
+  "0": {
+   "original_AP": 53.64492249324837,
+   "original_ROC_AUC": 84.36005912370825,
+   "trim10_AP": 46.97606804364471,
+   "trim10_ROC_AUC": 83.78310191244671,
+   "oracle10_AP": 53.06862463838103,
+   "oracle10_ROC_AUC": 84.09914904475376,
+   "centroid_AP": 40.89121333737101,
+   "centroid_ROC_AUC": 76.10236208592879,
+   "train_anomaly_rate": 0.0,
+   "test_anomaly_rate": 0.10980145084424872,
+   "groups_reaching_target": 57
+  },
+  "0.05": {
+   "original_AP": 37.00971745173649,
+   "original_ROC_AUC": 78.20815733722118,
+   "trim10_AP": 40.292577503515375,
+   "trim10_ROC_AUC": 78.9952058783609,
+   "oracle10_AP": 52.10948266022192,
+   "oracle10_ROC_AUC": 83.79953529512161,
+   "centroid_AP": 38.072170443211334,
+   "centroid_ROC_AUC": 74.8094906646291,
+   "train_anomaly_rate": 0.040430714534634954,
+   "test_anomaly_rate": 0.10980145084424872,
+   "groups_reaching_target": 36
+  },
+  "0.1": {
+   "original_AP": 34.72397966792934,
+   "original_ROC_AUC": 76.78410256114036,
+   "trim10_AP": 38.424832379579854,
+   "trim10_ROC_AUC": 77.50501624209647,
+   "oracle10_AP": 51.763287535674706,
+   "oracle10_ROC_AUC": 83.74336972420298,
+   "centroid_AP": 36.965559021767724,
+   "centroid_ROC_AUC": 74.130731729588,
+   "train_anomaly_rate": 0.06055647717832697,
+   "test_anomaly_rate": 0.10980145084424872,
+   "groups_reaching_target": 18
+  },
+  "0.2": {
+   "original_AP": 33.204263291423494,
+   "original_ROC_AUC": 75.6440448595049,
+   "trim10_AP": 36.889138832061036,
+   "trim10_ROC_AUC": 76.45483925531151,
+   "oracle10_AP": 48.63076551105067,
+   "oracle10_ROC_AUC": 82.03095866923248,
+   "centroid_AP": 36.01972392930112,
+   "centroid_ROC_AUC": 73.28227414596725,
+   "train_anomaly_rate": 0.08666087054445515,
+   "test_anomaly_rate": 0.10980145084424872,
+   "groups_reaching_target": 13
+  }
+ },
+ "C_mean57": {
+  "trim0_AP": 24.97332351277034,
+  "trim0_ROC_AUC": 70.54469238880593,
+  "trim5_AP": 30.83035682589851,
+  "trim5_ROC_AUC": 72.22296144335374,
+  "trim10_AP": 32.62309498048198,
+  "trim10_ROC_AUC": 73.38492508658929,
+  "trim20_AP": 33.46833958533435,
+  "trim20_ROC_AUC": 74.6584888922713,
+  "centroid_AP": 32.70021741445476,
+  "centroid_ROC_AUC": 71.95150631524876
+ }
+}

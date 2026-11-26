@@ -1,0 +1,8 @@
+AP/ROC mismatches vs raw_win: 0
+mean57 anomaly share %: training 10.97  scored-dropped 25.57  random-dropped 10.92
+scored drop > base in 50/57 groups, < base in 7; median lift 2.54x
+Wilcoxon scored vs random dropped share: p=3.59e-08
+Wilcoxon scored dropped vs training share: p=3.28e-08
+last-round recall of training anomalies: scored 0.374 (ceiling 0.832), random 0.097
+Spearman (scored - random dropped share) vs (scored - random AP): rho=0.494 p=9.42e-05
+groups where scored drop < training share: 9_census, 26_optdigits, 33_skin, 35_SpamBase, 39_vertebral, 46_WPBC, imdb
