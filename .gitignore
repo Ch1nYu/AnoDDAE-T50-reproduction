@@ -1,0 +1,15 @@
+# Local-only notes, not part of the repo
+組內參考/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Rerun outputs (historical results live in raw*/)
+results/*
+!results/dataset_sizes.json
+
+# OS files
+.DS_Store
+Thumbs.db
