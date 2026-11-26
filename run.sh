@@ -1,3 +1,5 @@
+# Historical script from the first batch of runs (seeds 0-2), kept for audit only.
+# It rewrites environment.txt and re-clones ADBench; do not use it for setup. See README.
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
 trap 'status=$?; printf "%s\n" "$status" > exit-code' EXIT

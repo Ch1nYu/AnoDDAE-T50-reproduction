@@ -41,9 +41,29 @@
 
 其他檔案：anoddae_repro/ 是模型與執行程式；tables/ 是所有彙總表與檢定結果；data_src/ 附一份 6_cardio 資料供試跑；根目錄的 *.py 是各實驗的彙總與檢定程式，用法見下文各節。
 
+## 範圍與限制
+
+範圍：
+
+- 只實作無監督 DDAE（linear 排程）。沒有重現論文的 DDAE-C、半監督 DDAE，也沒有重現排程、時間嵌入維度、網路架構等消融實驗。半監督部分只計算了平方距離基準（見最後一節）。
+- 只附 T=50 主實驗（raw/scores/）的逐樣本分數；其他實驗只有每次執行的指標紀錄（JSONL），只能從那一層重算。
+
+限制：
+
+- dte2 是傳導式設定：訓練列從要評分的同一批資料有放回抽樣，結果代表「在手上這批資料裡找異常」，不代表模型對新資料的表現。只有「三個佐證實驗」B 使用不重疊的測試集。
+- 改良版只在 T=50 有顯著進步；在 T=1000 只多 0.51 個 AP 點，不顯著。兩種 T 下，改良版跟平方距離基準的差異都不顯著。
+- AP 使用 average_precision_score。論文沒有說明 PR-AUC 的算法，所以跟論文數字只能比較量級。
+- 不同平台、裝置的結果不逐位相同，見上一節；每個比較只在同一環境的結果之間做。
+- 污染比例實驗只用 3 個 seed、每個影像與文字家族一個檔，多數資料集達不到目標污染比例。
+- 依標籤剔除使用真實標籤，只能當上限，不是可實際使用的方法。
+
+## 授權
+
+程式碼以 MIT 授權釋出，見 LICENSE。data_src/ 中的 6_cardio.npz 取自 [ADBench](https://github.com/Minqi824/ADBench)（commit 見 adbench-commit.txt），依 ADBench 原本的授權使用，不在 MIT 授權範圍內。
+
 ## 建立環境
 
-在 Linux 或 WSL 的repo 根目錄執行。本次使用 Omarchy 主機，環境為 Linux 7.2.15-1-omarchy x86_64、Python 3.12.16、CPU PyTorch。environment.txt 記錄實驗環境的完整套件版本。以下使用已安裝的 uv。
+在 Linux 或 WSL 的 repo 根目錄執行。本次使用 Omarchy 主機，環境為 Linux 7.2.15-1-omarchy x86_64、Python 3.12.16、CPU PyTorch。environment.txt 記錄實驗環境的完整套件版本。以下使用已安裝的 uv。
 
 ~~~bash
 uv venv --python 3.12.16 .venv
@@ -51,6 +71,15 @@ source .venv/bin/activate
 uv pip install torch==2.15.0+cpu --index https://download.pytorch.org/whl/cpu
 uv pip install -r environment.txt
 ~~~
+
+Windows 或其他 Python 3.12 環境可以不鎖版本，直接用 requirements.txt（2026-11-26 在 Windows 11 從乾淨 clone 驗證過 recompute.py、stats_tests.py 與四支分析程式，結果跟 tables/ 一致，只有換行符號與浮點數最後一位的差異）：
+
+~~~bash
+uv venv --python 3.12 .venv
+uv pip install -r requirements.txt
+~~~
+
+run.sh 是第一批實驗（seed 0 至 2）當時的歷史執行腳本，會重寫 environment.txt 並重新下載 ADBench，只供查核，不要當作安裝步驟。
 
 ## 從原始結果重算
 
