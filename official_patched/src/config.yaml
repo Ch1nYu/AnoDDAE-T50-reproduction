@@ -1,0 +1,28 @@
+seed: 111
+
+train:
+  setting: semi-supervised
+  lr: 0.001
+  epochs: 100
+  eval_epochs: 10
+  # batch_size is derived from the data size (closest power of 2 to |X|/10), see src/utils.py
+
+data:
+  name: 17_InternetAds.npz
+  path: ad_bench
+  normalize: true
+
+model:
+  hidden_dim: [512, 512]
+  activation: lrelu # relu, lrelu, tanh, sigmoid
+  contrastive_alpha: 0.0 # > 0 enables DDAE-C (paper Eq. 8), e.g. 0.5
+  score_type: l2 # l2 = released code (sum_t ||e_t||), squared = paper Eq. 6
+
+diffusion:
+  num_timesteps: 50
+  beta_start: 0.0001
+  beta_end: 0.02
+  scheduler: linear # linear, cosine (fixed), quadratic, exponential, sigmoid
+  # paper: T=50 linear is best semi-supervised; larger T (500-1000) is best unsupervised
+  time_emb_dim: 4
+  time_emb_type: sinusoidal # sinusoidal or learnable ('learned' accepted)

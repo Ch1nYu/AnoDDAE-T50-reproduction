@@ -13,3 +13,6 @@ results/*
 # OS files
 .DS_Store
 Thumbs.db
+
+# ADBench data copied in for official_patched runs
+official_patched/ad_bench/
