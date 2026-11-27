@@ -72,6 +72,33 @@ EXPS["impr_oracletrim0.1_T1000"] = dict(BASE, T=1000, schedule="linear", score_s
 # trim-share sensitivity
 EXPS["impr_trim0.2_T50"] = dict(BASE, T=50, schedule="linear", trim_frac=0.2)
 
+# trimming-ratio sweep (answers "why 10%?"), run with --lite: q = 0 is the untrimmed baseline,
+# trim_frac="oracle" sets q to the true contamination rate of the training sample.
+# (Not the same as trim_mode="oracle" above, which drops the labelled anomalies themselves.)
+for _q in (0.0, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3):
+    EXPS[f"trimq{_q}_T50"] = dict(BASE, T=50, schedule="linear", trim_frac=_q)
+EXPS["trimq_oracle_T50"] = dict(BASE, T=50, schedule="linear", trim_frac="oracle")
+# trimming frequency at q = 0.1
+for _e in (5, 20):
+    EXPS[f"trimq0.1_every{_e}_T50"] = dict(BASE, T=50, schedule="linear", trim_frac=0.1, trim_every=_e)
+
+# ablation study, one component changed at a time (run with --lite, same seeds for every row)
+EXPS["abl_temb0_T50"] = dict(BASE, T=50, schedule="linear", t_dim=0)      # no timestep conditioning
+EXPS["abl_temb32_T50"] = dict(BASE, T=50, schedule="linear", t_dim=32)    # larger timestep embedding
+EXPS["abl_cosfix_T50"] = dict(BASE, T=50, schedule="cosine", cosine_impl="fixed")
+for _a in (0.1, 0.5):
+    EXPS[f"abl_ddaec{_a}_T50"] = dict(BASE, T=50, schedule="linear", contrastive_alpha=_a)
+
+# same ablation at T = 1000 (the paper's unsupervised setting), 100 scoring steps
+_K = dict(BASE, T=1000, schedule="linear", score_steps=100)
+EXPS["abl1k_base"] = dict(_K)
+EXPS["abl1k_temb0"] = dict(_K, t_dim=0)
+EXPS["abl1k_temb32"] = dict(_K, t_dim=32)
+EXPS["abl1k_cosfix"] = dict(_K, schedule="cosine", cosine_impl="fixed")
+EXPS["abl1k_trim0.1"] = dict(_K, trim_frac=0.1)
+for _a in (0.1, 0.5):
+    EXPS[f"abl1k_ddaec{_a}"] = dict(_K, contrastive_alpha=_a)
+
 RUN_OPTS = {  # runner options that are not model kwargs
     "per_step": {"ddae_unsup_T1000", "ddae_semi_T50", "sweepT_1000"},
     # also score with all T-1 steps from the same trained model (approximation check)
@@ -154,6 +181,8 @@ def run_job(job):
     try:
         cfg = dict(EXPS[exp])
         split = make_split(file, setting, seed, protocol=protocol, max_size=max_size)
+        if cfg.get("trim_frac") == "oracle":
+            cfg["trim_frac"] = float(np.mean(split.y_train))
         np.random.seed(seed)
         torch.manual_seed(seed)
         bs = batch_size_rule(split.n_total)
@@ -181,7 +210,7 @@ def run_job(job):
         official_cen_rho = float(np.corrcoef(_rk(sc["official"]), _rk(cen))[0, 1])  # Spearman
         rec = dict(exp=exp, file=file, setting=setting, seed=seed, protocol=protocol,
                    max_size=max_size, n_train=len(split.x_train), n_test=len(split.x_test), d=split.x_train.shape[1],
-                   anomaly_rate=float(y.mean()), train_anomaly_rate=float(np.mean(split.y_train)), batch_size=bs, final_loss=model.history[-1],
+                   anomaly_rate=float(y.mean()), train_anomaly_rate=float(np.mean(split.y_train)), trim_frac=float(cfg.get("trim_frac", 0.0)), batch_size=bs, final_loss=model.history[-1],
                    train_time=model.train_time, score_time=score_time, metrics=out)
         rec["device"] = os.environ.get("ANODDAE_DEVICE", "cpu")
         rec["official_cen_rho"] = official_cen_rho

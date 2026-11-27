@@ -16,7 +16,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RES = os.path.join(ROOT, "results")
+# ANODDAE_RESULTS points the analysis at a results folder, e.g. raw_full/ (see FULL_REPRO.md)
+RES = os.environ.get("ANODDAE_RESULTS", os.path.join(ROOT, "results"))
 REF = os.path.join(ROOT, "reference")
 
 # AnoDDAE paper, Table 1 (57 datasets, 5 seeds); PR-AUC == average precision

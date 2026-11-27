@@ -57,6 +57,17 @@
 - 污染比例實驗只用 3 個 seed、每個影像與文字家族一個檔，多數資料集達不到目標污染比例。
 - 依標籤剔除使用真實標籤，只能當上限，不是可實際使用的方法。
 
+## 完整重現、程式稽核與消融（併入）
+
+另一份更完整的重現與分析已併入本 repo，說明見 **[`FULL_REPRO.md`](FULL_REPRO.md)**：
+
+- `official_patched/`、`official_fixes.patch`、`AUDIT.md`：官方程式碼的錯誤清單與修正（cosine 排程錯誤、缺少 DDAE-C 等）
+- `scripts/`：彙總與分析腳本；`report/`：完整報告 HTML
+- `raw_full/`：論文 Table 1 重現（半監督與無監督）、T 掃描、排程比較、剔除比例掃描、消融實驗、完整規模剔除實驗的原始結果
+- `anoddae_repro/runner.py` 新增實驗：`trimq*`（剔除比例掃描）、`abl_*` / `abl1k_*`（消融）
+
+完整規模無監督（57 個資料集，3 次重複）：T=1000 加剔除 10%、逐步正規化分數，AP 33.85 ± 0.84、ROC 74.89 ± 0.68，論文為 32.77 ± 0.69、74.08 ± 0.51。
+
 ## 授權
 
 程式碼以 MIT 授權釋出，見 LICENSE。data_src/ 中的 6_cardio.npz 取自 [ADBench](https://github.com/Minqi824/ADBench)（commit 見 adbench-commit.txt），依 ADBench 原本的授權使用，不在 MIT 授權範圍內。

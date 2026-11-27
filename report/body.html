@@ -1,0 +1,213 @@
+<section id="tldr">
+  <div class="sec-head"><span class="secno">結論</span><h2>先說結果</h2></div>
+  <div class="tiles">
+    <div class="tile"><span class="k">半監督 DDAE 平均 AP（57 資料集）</span><span class="v"><span data-k="summary.table1.DDAE.semi_PR" data-f="2"></span></span><span class="s">論文 61.36 ± 2.23；本復現 <span data-k="summary.table1.DDAE.semi_seeds" data-f="0"></span> 個 seed</span></div>
+    <div class="tile"><span class="k">無監督 DDAE 平均 AP</span><span class="v"><span data-k="summary.table1.DDAE.unsup_PR" data-f="2"></span></span><span class="s">論文 32.77 ± 0.69；本復現 <span data-k="summary.table1.DDAE.unsup_seeds" data-f="0"></span> 個 seed</span></div>
+    <div class="tile"><span class="k">零訓練「到均值距離」無監督 AP</span><span class="v"><span data-k="centroid_all.unsup_ap.mean" data-f="2"></span></span><span class="s">score(x) = ‖x − μ‖²，不需任何模型</span></div>
+    <div class="tile"><span class="k">官方 cosine 排程的 ᾱₜ</span><span class="v">≡ 0</span><span class="s">β₀ = 1，所有步驟的輸入都是純雜訊</span></div>
+  </div>
+  <ol class="tight">
+<li><b>數字大致重現。</b>
+  <ul class="tight">
+    <li>無監督 DDAE 的平均 AP <span class="mono" data-k="summary.table1.DDAE.unsup_PR" data-f="2"></span>，論文 32.77，幾乎完全一致。</li>
+    <li>半監督為 <span class="mono" data-k="summary.table1.DDAE.semi_PR" data-f="2"></span>，論文 61.36，低約 2 點，在論文的 ± 範圍內。</li>
+    <li>在 26 個基線中，半監督仍排第 1；無監督為 AP 第 3、ROC 第 2，與論文描述相符。</li>
+  </ul></li>
+<li><b>無監督的 DDAE 幾乎等於一行公式。</b>零訓練的 ‖x − μ‖² 得到 <span class="mono" data-k="centroid_all.unsup_ap.mean" data-f="2"></span> AP，高於所有擴散式基線。DDAE 分數與它的逐樣本 Spearman 相關平均 <span class="mono" data-k="corr.unsup_centroid" data-f="2"></span>。原因是 T=1000 時約三分之一的步驟輸入已是純雜訊，那些步驟的誤差就是到均值的距離。</li>
+<li><b>半監督的領先主要來自評估流程的洩漏。</b>DTE 流程把小資料集有放回抽樣到 1000 筆，導致 91–100% 的測試正常樣本在訓練集中有完全相同的副本。DDAE 對 DTE-NP 的領先約 72% 來自這 13 個資料集；排除後與 kNN、DTE-NP 差距不顯著（p ≈ 0.35–0.45）。</li>
+<li><b>官方 cosine 排程有 bug。</b>ᾱₜ 恆為 0，模型只看得到雜訊，分數退化為到均值距離（半監督 <span class="mono" data-k="summary.schedulers_lite.semi.cosine-official.official_ap.mean" data-f="1"></span> vs <span class="mono" data-k="summary.schedulers_lite.semi.linear.centroid_ap.mean" data-f="1"></span>；無監督 <span class="mono" data-k="summary.schedulers_lite.unsup.cosine-official.official_ap.mean" data-f="1"></span> vs <span class="mono" data-k="summary.schedulers_lite.unsup.linear.centroid_ap.mean" data-f="1"></span>）。論文 Fig. 7「cosine 適合無監督」的結論來自這個 bug。</li>
+<li><b>DDAE-C 不在官方 repo 中。</b>依論文 Eq. 7–8 重新實作後，無監督與論文一致（<span class="mono" data-k="ablate.ddaec.unsup_ap" data-f="2"></span> vs 31.97）。半監督則隨對比權重 α 單調變差（α = 0.5 時 <span class="mono" data-k="ablate.ddaec.semi_ap" data-f="2"></span>，論文 59.48），論文的數字需要未公開的細節才能達到。</li>
+<li><b>最有效的改進是污染穩健訓練。</b>每 10 個 epoch 剔除分數最高的 10% 訓練列：無監督 T=50 的 AP 提升 <span class="mono" data-k="trim.T50_official_ap_gain" data-f="1"></span> 點（輕量協定），追平 T=1000。完整協定上 T=50 + 剪除為 <span class="mono" data-k="trim_full.ap" data-f="2"></span>，T=1000 原版為 <span class="mono" data-k="trim_full.base" data-f="2"></span>。這樣兩種情境都能用 T=50，只差一個開關；但在乾淨的半監督資料上開啟會變差（−7.3）。無監督下仍沒有方法顯著勝過零訓練的到均值距離。</li>
+</ol>
+</section>
+
+<section id="setup">
+  <div class="sec-head"><span class="secno">01</span><h2>復現設定與驗證</h2></div>
+  <p class="col">論文說它沿用 Livernoche 等人（DTE, ICLR 2024）的評估流程，且 Table 1 的所有基線數字都直接取自 DTE。因此我先把 DTE 公開程式碼的資料流程逐行重寫，再用一個沒有隨機性的方法（kNN, k=5）檢查是否能得到 DTE 附錄公布的逐資料集數字。</p>
+  <ul class="tight">
+    <li><b>半監督流程逐值吻合。</b>57 個資料集中，所有不含隨機抽樣的資料集與 DTE 公布值到小數第二位相同；5 個 seed 平均 ROC-AUC <span class="mono" data-k="knn_validation.semi.ours_roc" data-f="2"></span> vs DTE <span class="mono" data-k="knn_validation.semi.dte_roc" data-f="2"></span>，AP <span class="mono" data-k="knn_validation.semi.ours_ap" data-f="2"></span> vs <span class="mono" data-k="knn_validation.semi.dte_ap" data-f="2"></span>。這也確認了 CIFAR10、MNIST-C 等 CV/NLP 資料集在 DTE 中是「整個家族所有檔案的平均」（例如 CIFAR10 = CIFAR10_0…9 的平均），57 個資料集實際對應 121 個檔案。</li>
+    <li><b>無監督流程無法重現 DTE 公布的基線。</b>照 DTE 公開程式碼（小資料集重抽樣 + bootstrap）得到的 kNN 為 ROC <span class="mono" data-k="knn_validation.unsup.ours_roc" data-f="2"></span> / AP <span class="mono" data-k="knn_validation.unsup.ours_ap" data-f="2"></span>，公布值為 <span class="mono" data-k="knn_validation.unsup.dte_roc" data-f="2"></span> / <span class="mono" data-k="knn_validation.unsup.dte_ap" data-f="2"></span>。差距集中在含大量重複列的資料集。拿掉小資料集重抽樣後明顯接近，所以無監督實驗採用這個版本（<code>dte2</code>）。論文的無監督比較因此建立在無法完全驗證的基線上。</li>
+    <li><b>重新實作 = 官方實作。</b>網路結構、初始化順序、五種噪聲排程的 ᾱₜ 與官方程式逐數值相同（已用斷言檢查）。在 README 的範例（InternetAds、半監督、T=50）上以同資料同 seed 各跑 <span data-k="official_check.n" data-f="0"></span> 次：官方 AP <span class="mono" data-k="official_check.off_ap.0" data-f="2"></span> ± <span class="mono" data-k="official_check.off_ap.1" data-f="2"></span>，重新實作 <span class="mono" data-k="official_check.re_ap.0" data-f="2"></span> ± <span class="mono" data-k="official_check.re_ap.1" data-f="2"></span>；ROC <span class="mono" data-k="official_check.off_roc.0" data-f="2"></span> vs <span class="mono" data-k="official_check.re_roc.0" data-f="2"></span>。</li>
+    <li><b>超參數。</b>沿用官方 <code>config.yaml</code> 與論文：MLP [512, 512]、LeakyReLU、4 維 sinusoidal 時間嵌入、Adam 1e-3、100 epochs、batch = 最接近 |X|/10 的 2 的冪次、β 從 1e-4 線性增加到 0.02。半監督用 T=50、無監督用 T=1000（論文 Fig. 5 的最佳值，也與 Table 1 數字吻合）。異常分數主結果採官方程式碼的 Σₜ‖x₀−x̂₀‖，同時記錄論文 Eq. 6 的平方版本。</li>
+    <li><b>近似。</b>T=1000 的評分在 100 個等距步驟上計算（再乘以 999/100），用同一批模型比較全 999 步的結果見第 5 節。</li>
+  </ul>
+</section>
+
+<section id="main">
+  <div class="sec-head"><span class="secno">02</span><h2>主結果：論文 Table 1 對照</h2></div>
+  <p class="col">半監督設定（只用正常樣本訓練）是論文的主要賣點。本復現在 57 個資料集、5 個 seed 上得到 DDAE 平均 AP <b><span data-k="summary.table1.DDAE.semi_PR" data-f="2"></span></b>、ROC <b><span data-k="summary.table1.DDAE.semi_ROC" data-f="2"></span></b>，論文為 61.36 / 83.17：AP 低約 2 點，ROC 低約 0.8 點，都在論文自己報告的 ± 範圍內。在同一批 57 個資料集上，它仍是 26 個 DTE 基線中平均 AP 與平均排名都最好的方法，「半監督表格異常偵測的新 SOTA」這個質性結論成立，只是領先幅度比論文小：本復現領先第二名 DTE-NP 約 2.3 點 AP，論文中是 4.2 點。</p>
+<p class="col">表中「±」採用與論文相同的定義：每個資料集在不同 seed 間的標準差，再對 57 個資料集取平均。我用 DTE 附錄的逐資料集標準差驗證過，這個定義能精確得到論文 Table 1 所有基線的 ± 值（例如 DTE-NP 半監督 57.13 ± 2.67）。</p>
+  <div class="tablewrap"><!--__TABLE1__--></div>
+  <p class="muted" style="font-size:13px">AP 即 ADBench／DTE 所稱的 AUC-PR。± 為每個資料集跨 seed 標準差的 57 資料集平均（與論文 Table 1 相同）；只有 1 個 seed 的列不標 ±。seeds 欄為「無監督 / 半監督」。</p>
+  <div class="figrow">
+    <figure><div id="lb-semi"></div><figcaption>26 個 DTE 基線（灰）取自 DTE 附錄的逐資料集數值，與本復現的 DDAE（藍）、到均值距離（綠）在同樣 57 個資料集上平均。橘色為論文 Table 1 的 DDAE。</figcaption></figure>
+    <figure><div id="lb-unsup"></div><figcaption>同左，無監督設定。DTE 的無監督基線數字無法以其公開程式碼重現（第 01 節），比較時請保留這個不確定性。</figcaption></figure>
+  </div>
+  <p class="col">下表是逐資料集的配對比較（57 對，AP，Wilcoxon signed-rank）。半監督下，DDAE 顯著優於 kNN、DTE-NP、DDPM、DTE-C，與 ICL 的差距不顯著；第 06 節會說明這個優勢主要來自哪些資料集。無監督下，DDAE 只顯著優於 DDPM、LOF、ICL，以及零訓練的到均值距離（僅 +0.36）；與 kNN、DTE-NP、IForest 的差距都不顯著。</p>
+  <div class="tablewrap"><!--__TESTS__--></div>
+</section>
+
+<section id="unsup">
+  <div class="sec-head"><span class="secno">03</span><h2>發現一：無監督的 DDAE 幾乎就是「到均值的距離」</h2></div>
+  <p class="col">無監督設定的復現非常準：DDAE 平均 AP <b><span data-k="summary.table1.DDAE.unsup_PR" data-f="2"></span></b>、ROC <b><span data-k="summary.table1.DDAE.unsup_ROC" data-f="2"></span></b>，論文為 32.77 / 74.08。依平均排名，DDAE 在 AP 排第 3、ROC 排第 2，和論文「PR-AUC 第 4、ROC-AUC 第 2」的說法一致。</p>
+<p class="col">問題在於一個完全不需要訓練的偵測器也做得到：把每個測試點到訓練資料平均值的平方距離 ‖x − μ‖² 當成分數（資料已標準化，這就是向量長度），平均 AP 為 <b><span data-k="summary.variants.unsup.centroid_ap.mean" data-f="2"></span></b>，只比 DDAE 低 0.36 點，並且高於論文引用的所有擴散式基線（DDPM 30.09、DTE-NP 29.47、DTE-C 28.79）。逐樣本來看，DDAE 分數與到均值距離的 Spearman 相關在 57 個資料集上平均為 <b><span data-k="corr.unsup_centroid" data-f="3"></span></b>（最低 <span data-k="corr.unsup_centroid_min" data-f="3"></span>）：兩者幾乎以相同順序排列測試點。</p>
+<p class="col">原因在擴散排程本身。T=1000 的線性排程下，第 <span data-k="pure_noise_from_t" data-f="0"></span> 步之後 ᾱₜ &lt; 0.01，約三分之一的步驟輸入幾乎只剩雜訊。這時 MSE 最小的重建就是訓練均值 E[x₀]，該步的誤差即 ‖x₀ − μ‖²。異常分數是所有步驟的加總，這些項目占了主導。論文 Fig. 6 觀察到「無監督時後段步驟最有用」，論文的解釋是「極端雜訊是一種正則化」；更直接的解釋是：後段步驟計算的就是到均值的距離，而在無監督（訓練資料含異常）的情況下，這個全域距離是很強的基線。</p>
+<p class="callout">論文的無監督結論（DDAE 優於所有深度學習方法、在擴散方法中最好）在數字上成立。但它的優勢幾乎全部可以由一行公式 ‖x − μ‖² 取得，論文沒有報告這個對照。</p>
+  <div class="figrow">
+    <figure><div id="ps-unsup"></div><figcaption>T=1000 線性排程下，只用第 t 步的重建誤差（藍）與累加到第 t 步（綠）的 AP。陰影區 ᾱₜ &lt; 0.01，模型輸入幾乎不含 x₀ 的資訊，最佳重建只能是平均值。對應論文 Fig. 6 上圖。</figcaption></figure>
+    <figure><div id="sc-unsup"></div><figcaption>每個點是一個資料集（seed 平均），虛線為 y = x。點貼近對角線代表 DDAE 與零訓練的到均值距離表現相同。</figcaption></figure>
+  </div>
+</section>
+
+<section id="cosine">
+  <div class="sec-head"><span class="secno">04</span><h2>發現二：官方 cosine 排程讓模型只看得到雜訊</h2></div>
+  <p class="col"><code>cosine_noise_schedule()</code> 依 Nichol &amp; Dhariwal 的公式算出 ᾱₜ（累積訊號比例），卻把它當成 βₜ 回傳。第一個值 ᾱ₀ = 1 變成 β₀ = 1，於是 α₀ = 0，之後所有的 ᾱₜ = ∏αᵢ 都是 0。前向過程 xₜ = √ᾱₜ·x₀ + √(1−ᾱₜ)·ε 退化成 xₜ = ε：無論 t 為何，網路看到的都是純高斯雜訊，最佳解只能輸出訓練均值，異常分數因此等同到均值距離。</p>
+  <div class="figrow single">
+    <figure><div id="ab-chart"></div><figcaption>四種設定的 ᾱₜ，直接由本套件的排程程式計算（與官方程式逐值相同）。官方 cosine（橘）整條為 0；修正後的 cosine（灰）才是論文 Fig. 6 畫出的曲線。</figcaption></figure>
+  </div>
+  <p class="col">實驗驗證（T=100，輕量協定）：半監督設定下，官方 cosine 的平均 AP 為 <b><span data-k="summary.schedulers_lite.semi.cosine-official.official_ap.mean" data-f="2"></span></b>，同一批資料上零訓練的到均值距離為 <span data-k="summary.schedulers_lite.semi.linear.centroid_ap.mean" data-f="2"></span>，兩者幾乎相同。論文 Fig. 7 中 cosine 的半監督數值約為 0.45（PR）／0.73（ROC），與這個「退化成到均值距離」的結果吻合。修正後的 cosine 為 <span data-k="summary.schedulers_lite.semi.cosine-fixed.official_ap.mean" data-f="2"></span>，比官方版高約 7 點，但仍低於 linear：在 T=100 時它的後段 ᾱₜ 已接近 0，對半監督來說雜訊太強。</p>
+<p class="col">因此論文「cosine 在半監督最差、在無監督最好，所以應依訓練情境選排程」的結論，主要是在比較「正常的排程」與「零訓練的到均值距離」，而非比較兩種排程。修正後的 cosine 應重新評估。</p>
+  <div class="figrow">
+    <figure><div id="sch-semi"></div><figcaption>T=100、輕量協定（見第 05 節）下五種排程的平均 AP。橘＝官方 cosine，綠＝修正版。虛線為零訓練的到均值距離。</figcaption></figure>
+    <figure><div id="sch-unsup"></div><figcaption>同左，無監督。</figcaption></figure>
+  </div>
+</section>
+
+<section id="noise">
+  <div class="sec-head"><span class="secno">05</span><h2>擴散步數 T 的影響（論文 Fig. 5）</h2></div>
+  <p class="col">論文 Fig. 5 的結論是：半監督在 T≈50–100 達到峰值後下降，無監督則隨 T 增加而上升直到 500–1000。下圖在輕量協定上重跑同一組 T（1 個 seed，每個 CV/NLP 家族取第一個檔案、每個資料集最多 10,000 筆），只看趨勢。</p>
+<ul class="tight">
+<li><b>半監督：趨勢完全重現。</b>AP 從 T=5 的 <span class="mono" data-k="summary.sweepT_lite.semi.official.ap.5.mean" data-f="1"></span> 升到 T=20 的 <span class="mono" data-k="summary.sweepT_lite.semi.official.ap.20.mean" data-f="1"></span>、T=50 的 <span class="mono" data-k="summary.sweepT_lite.semi.official.ap.50.mean" data-f="1"></span>，之後一路下降到 T=1000 的 <span class="mono" data-k="summary.sweepT_lite.semi.official.ap.1000.mean" data-f="1"></span>。峰值位置和下降幅度都與論文一致。</li>
+<li><b>逐特徵正規化評分讓大 T 不那麼糟。</b>在 T=1000 時它把 AP 拉回 <span class="mono" data-k="summary.sweepT_lite.semi.featnorm.ap.1000.mean" data-f="1"></span>（+3.5），T=300 時 +1.5；在最佳 T 附近則沒有差別。這代表它主要是在修正「高噪聲步驟的誤差量級主導總分」的問題。</li>
+<li><b>無監督：趨勢也重現，但終點就是到均值距離。</b>AP 隨 T 單調上升：T=5 為 <span class="mono" data-k="summary.sweepT_lite.unsup.official.ap.5.mean" data-f="1"></span>、T=100 為 <span class="mono" data-k="summary.sweepT_lite.unsup.official.ap.100.mean" data-f="1"></span>、T=300 為 <span class="mono" data-k="summary.sweepT_lite.unsup.official.ap.300.mean" data-f="1"></span>、T=1000 為 <span class="mono" data-k="summary.sweepT_lite.unsup.official.ap.1000.mean" data-f="1"></span>。同一批資料上零訓練的到均值距離為 <span class="mono" data-k="summary.sweepT_lite.unsup.centroid.ap.5.mean" data-f="1"></span>：增加 T 的效果，就是讓分數越來越接近這條線。</li>
+<li><b>100 步近似可靠。</b>在輕量協定的 57 個資料集上，以同一批 T=1000 模型比較 100 個等距步驟與完整 999 步：平均 AP <span class="mono" data-k="summary.strided_check.ap_strided" data-f="2"></span> vs <span class="mono" data-k="summary.strided_check.ap_full" data-f="2"></span>，逐資料集平均差 <span class="mono" data-k="summary.strided_check.mean_abs_ap_diff" data-f="2"></span>，評分時間減少約 <span class="mono" data-k="summary.strided_check.speedup" data-f="1"></span> 倍。</li>
+</ul>
+  <div class="figrow">
+    <figure><div id="sw-semi"></div><figcaption>半監督，T ∈ {5, …, 1000}，1 個 seed。藍：官方評分；綠：逐特徵正規化評分（第 08 節）。</figcaption></figure>
+    <figure><div id="sw-unsup"></div><figcaption>無監督。虛線為到均值距離。</figcaption></figure>
+  </div>
+  <div class="figrow">
+    <figure><div id="ps-semi"></div><figcaption>半監督 T=50 的逐步驟 AP（對應論文 Fig. 6 下圖）。</figcaption></figure>
+    <figure><div id="sc-semi"></div><figcaption>半監督每個資料集的 AP：DDAE vs kNN，虛線為 y = x。</figcaption></figure>
+  </div>
+</section>
+
+<section id="protocol">
+  <div class="sec-head"><span class="secno">06</span><h2>評估協定本身的影響</h2></div>
+  <p class="col">在半監督設定下，論文的 DDAE 與 DTE 的基線共用同一個資料流程（第 01 節已逐值驗證）。這個流程有兩個會影響個別資料集結果的人為效應；官方 AnoDDAE 程式碼則有第三個。</p>
+<div class="tablewrap"><table><thead><tr><th>效應</th><th>證據</th><th>影響</th></tr></thead><tbody>
+<tr><td><b>1. 重抽樣造成訓練／測試重複列</b>（DTE）<br><span class="muted">少於 1000 列的資料集以「有放回抽樣」補到 1000 列，之後才切分</span></td><td>glass、Hepatitis、wine、WBC、WPBC 有 91–100% 的測試正常樣本與某筆訓練樣本完全相同；測試異常 0%</td><td>能記住訓練點的大模型在這些資料集上近乎滿分</td></tr>
+<tr><td><b>2. 切分沒有打亂</b>（DTE）<br><span class="muted">半監督訓練集固定取檔案順序中前 50% 的正常樣本</span></td><td>線性分類器分辨「前半 vs 後半正常樣本」：letter AUC 0.997、cardio 0.79、vowels 0.71、backdoor 0.67；隨機切分約 0.50</td><td>測試正常樣本的分佈與訓練不同，被當成異常；letter 上所有方法都很差</td></tr>
+<tr><td><b>3. 用含測試異常的全部資料擬合標準化</b>（官方 AnoDDAE）</td><td>backdoor 上零訓練到均值距離的 AP 從 8 變成 62</td><td>只在異常中變動的特徵被除以極小的標準差而放大，等於把測試異常的資訊放進前處理</td></tr>
+</tbody></table></div>
+<p class="col">效應 1 對結論的影響最大。57 個資料集中有 <span data-k="upsampling.n_up" data-f="0"></span> 個經過重抽樣。在這些資料集上 DDAE 平均 AP 為 <span class="mono" data-k="upsampling.ddae_up" data-f="1"></span>，DTE-NP 為 <span class="mono" data-k="upsampling.dtenp_up" data-f="1"></span>、kNN 為 <span class="mono" data-k="upsampling.knn_up" data-f="1"></span>。DDAE 相對 DTE-NP 的整體領先，有約 72% 來自這 <span data-k="upsampling.n_up" data-f="0"></span> 個資料集。在其餘 <span data-k="upsampling.n_other" data-f="0"></span> 個資料集上：</p>
+<ul class="tight">
+<li>DDAE <span class="mono" data-k="upsampling.ddae_other" data-f="2"></span>、DTE-NP <span class="mono" data-k="upsampling.dtenp_other" data-f="2"></span>、kNN <span class="mono" data-k="upsampling.knn_other" data-f="2"></span>。</li>
+<li>差距 +<span data-k="upsampling.d_dtenp" data-f="2"></span>（p = <span data-k="upsampling.p_dtenp" data-f="2"></span>）與 +<span data-k="upsampling.d_knn" data-f="2"></span>（p = <span data-k="upsampling.p_knn" data-f="2"></span>），都不顯著。</li>
+<li>相對 DDPM 仍顯著較好（+<span data-k="upsampling.d_ddpm" data-f="2"></span>，p = <span data-k="upsampling.p_ddpm" data-f="3"></span>）。</li>
+</ul>
+<p class="callout">較精確的說法是：DDAE 穩定優於其他擴散式方法，但在沒有重複列洩漏的資料上，與 kNN／DTE-NP 在統計上打平。論文的「新 SOTA」主要由評估流程的重複列效應撐起。</p>
+<p class="col">反過來用官方程式碼的流程（隨機切分、不重抽樣、Scaler 擬合全部資料），1 個 seed 的平均 AP 為 <span class="mono" data-k="summary.protocol_effect.ddae_semi_ap.repo.mean" data-f="2"></span>，DTE 流程為 <span class="mono" data-k="summary.protocol_effect.ddae_semi_ap.dte.mean" data-f="2"></span>。上述三種效應互相抵銷，57 資料集平均只差約 1.6 點，個別資料集則可差到 ±60 點。因此作者無論用哪一種流程，都不足以解釋本復現與論文之間約 2 點的差距。</p>
+</section>
+
+<section id="ddaec">
+  <div class="sec-head"><span class="secno">07</span><h2>DDAE-C 與 DAE 基線</h2></div>
+  <p class="col">DDAE-C 依論文 Eq. 7–8 與 Alg. 1 實作。論文沒有交代的細節，本復現的選擇如下：</p>
+<ul class="tight">
+<li>潛在表示 z 取最後一個隱藏層線性輸出（512 維，啟用函數之前）。如此 DDAE-C(α=0) 與 DDAE 是同一個網路。</li>
+<li>正樣本對是同一批次中隨機配對的兩筆訓練資料，兩者都以該步的 eₜ 編碼。</li>
+<li>負樣本對是 (x₀, xₜ)。</li>
+<li>δ 為歐氏距離，邊界 m = 1 + t/T。</li>
+<li>總損失為 (1−α)·L_rec + α·L_cont，α = 0.5；Adam 對損失尺度不敏感，這與 Alg. 1 的 L_rec + L_cont 等價。</li>
+</ul>
+<p class="col">DAE 為同一個 MLP、無時間嵌入、固定噪聲 x + σε。論文沒有給 σ，因此跑了 σ = 0.1 與 0.5，測試時輸入乾淨資料。以下皆為完整協定、1 個 seed，DDAE 欄為同 seed 的對照。</p>
+<div class="tablewrap"><table><thead><tr><th>方法</th><th class="num">半監督 AP</th><th class="num">半監督 ROC</th><th class="num">無監督 AP</th><th class="num">無監督 ROC</th><th>論文（半監督／無監督 AP）</th></tr></thead><tbody>
+<tr class="ours"><td>DDAE（seed 0）</td><td class="num" data-k="ablate.ddae.semi_ap" data-f="2"></td><td class="num" data-k="ablate.ddae.semi_roc" data-f="2"></td><td class="num" data-k="ablate.ddae.unsup_ap" data-f="2"></td><td class="num" data-k="ablate.ddae.unsup_roc" data-f="2"></td><td>61.36／32.77</td></tr>
+<tr><td>DDAE-C（α = 0.5）</td><td class="num" data-k="ablate.ddaec.semi_ap" data-f="2"></td><td class="num" data-k="ablate.ddaec.semi_roc" data-f="2"></td><td class="num" data-k="ablate.ddaec.unsup_ap" data-f="2"></td><td class="num" data-k="ablate.ddaec.unsup_roc" data-f="2"></td><td>59.48／31.97</td></tr>
+<tr><td>DAE σ = 0.1</td><td class="num" data-k="ablate.dae01.semi_ap" data-f="2"></td><td class="num" data-k="ablate.dae01.semi_roc" data-f="2"></td><td class="num" data-k="ablate.dae01.unsup_ap" data-f="2"></td><td class="num" data-k="ablate.dae01.unsup_roc" data-f="2"></td><td rowspan="2">59.60／19.85（σ 未說明）</td></tr>
+<tr><td>DAE σ = 0.5</td><td class="num" data-k="ablate.dae05.semi_ap" data-f="2"></td><td class="num" data-k="ablate.dae05.semi_roc" data-f="2"></td><td class="num" data-k="ablate.dae05.unsup_ap" data-f="2"></td><td class="num" data-k="ablate.dae05.unsup_roc" data-f="2"></td></tr>
+</tbody></table></div>
+<p class="col"><b>DAE。</b>σ = 0.5 的 DAE 在無監督得到 <span class="mono" data-k="ablate.dae05.unsup_ap" data-f="2"></span> / <span class="mono" data-k="ablate.dae05.unsup_roc" data-f="2"></span>，與論文的 DAE（19.85 / 63.73）幾乎相同；半監督 <span class="mono" data-k="ablate.dae05.semi_ap" data-f="2"></span> 也接近論文的 59.60。論文的 DAE 很可能用了 σ ≈ 0.5。論文「無監督 DDAE 比 DAE 的 PR-AUC 高 65.1%」因此可以重現（本復現 +64%）。不過同一個 DAE 改用 σ = 0.1 就有 <span class="mono" data-k="ablate.dae01.unsup_ap" data-f="2"></span>，零訓練的到均值距離也有 32.70。這 65% 的提升，可以完全由「DDAE 的分數趨近到均值距離」解釋。半監督時，DDAE 只比最好的 DAE 高 <span class="mono" data-k="ablate.ddae_minus_dae_semi" data-f="2"></span> AP（論文為 1.76）。</p>
+<p class="col"><b>DDAE-C。</b>無監督時 DDAE-C 與 DDAE 幾乎相同（<span class="mono" data-k="ablate.ddaec.unsup_ap" data-f="2"></span> vs <span class="mono" data-k="ablate.ddae.unsup_ap" data-f="2"></span>），與論文的小差距一致。半監督時，α = 0.5 的 DDAE-C 明顯較差（<span class="mono" data-k="ablate.ddaec.semi_ap" data-f="2"></span>，論文 59.48）：對比損失要求「任意兩個正常樣本的潛在表示彼此靠近」，這與重建目標直接衝突，α 太大時潛在空間被壓縮、重建品質下降。以輕量協定掃描 α（半監督 T=50，1 個 seed）：</p>
+<div class="tablewrap"><table><thead><tr><th>設定</th><th class="num">AP</th><th class="num">ROC</th></tr></thead><tbody>
+<tr class="ours"><td>DDAE（α = 0）</td><td class="num" data-k="ddaec_alpha.ddae_ap" data-f="2"></td><td class="num" data-k="ddaec_alpha.ddae_roc" data-f="2"></td></tr>
+<tr><td>DDAE-C α = 0.01</td><td class="num" data-k="ddaec_alpha.a001_ap" data-f="2"></td><td class="num" data-k="ddaec_alpha.a001_roc" data-f="2"></td></tr>
+<tr><td>DDAE-C α = 0.1</td><td class="num" data-k="ddaec_alpha.a01_ap" data-f="2"></td><td class="num" data-k="ddaec_alpha.a01_roc" data-f="2"></td></tr>
+<tr><td>DDAE-C α = 0.5</td><td class="num" data-k="ddaec_alpha.a05_ap" data-f="2"></td><td class="num" data-k="ddaec_alpha.a05_roc" data-f="2"></td></tr>
+</tbody></table></div>
+<p class="col">結果是單調的：權重越大越差，連 α = 0.01 都顯著低於 DDAE（約 −3 AP，p = 0.002）。論文報告的 DDAE-C 只比 DDAE 低 1.9 點；照論文文字描述的實作，只有在極小的 α，或某個未公開的細節（例如把潛在向量正規化到單位球面、不同的正樣本構造）下才可能達到。根本的問題在設計：把「任意兩個正常樣本」當正樣本對並拉近，等於要求編碼器忽略正常樣本之間的差異，而這正是重建所需要的資訊。較合理的方向是只拉近同一筆資料在不同噪聲下的表示，或改用 InfoNCE 一類以實例為單位的對比目標。</p>
+</section>
+
+<section id="improve">
+  <div class="sec-head"><span class="secno">08</span><h2>改進：已驗證的與建議的方向</h2></div>
+  <p class="col">所有改進都和原版在同一份資料、同一個 seed 上成對比較。下表的「輕量」指第 05 節的輕量協定（57 個資料集、1 個 seed），「完整」指主實驗協定。</p>
+<div class="tablewrap"><table><thead><tr><th>改進</th><th>設定</th><th class="num">原版</th><th class="num">改進後</th><th class="num">差</th><th>結論</th></tr></thead><tbody>
+<tr class="ours"><td><b>污染穩健訓練</b>：每 10 epoch 用目前模型為訓練列打分，丟掉分數最高的 10% 再繼續訓練</td><td>無監督 T=50（輕量）</td><td class="num"><span data-k="trim.T50_official_ap_base" data-f="2"></span></td><td class="num"><span data-k="trim.T50_official_ap_trim" data-f="2"></span></td><td class="num pos">+<span data-k="trim.T50_official_ap_gain" data-f="2"></span></td><td>對 T=50 是最大的改進：低噪聲模型不再學會重建異常，ROC 也 +<span data-k="trim.T50_official_roc_gain" data-f="2"></span>。效果是追平 T=1000 與到均值距離，並未超越</td></tr>
+<tr><td>同上，但用在乾淨的訓練資料</td><td>半監督 T=50（輕量）</td><td class="num"><span data-k="trim_semi.base" data-f="2"></span></td><td class="num"><span data-k="trim_semi.trim" data-f="2"></span></td><td class="num neg"><span data-k="trim_semi.gain" data-f="2"></span></td><td>會傷害效能：被剪掉的是較難但正常的樣本。只應在訓練資料可能含異常時開啟</td></tr>
+<tr><td>同上</td><td>無監督 T=1000（輕量）</td><td class="num"><span data-k="trim.T1000_official_ap_base" data-f="2"></span></td><td class="num"><span data-k="trim.T1000_official_ap_trim" data-f="2"></span></td><td class="num pos">+<span data-k="trim.T1000_official_ap_gain" data-f="2"></span></td><td>小幅改善；T=1000 本來就接近到均值距離</td></tr>
+<tr><td>同上（完整協定確認）</td><td>無監督（完整，seed 0）</td><td class="num"><span data-k="trim_full.base" data-f="2"></span><br><span class="muted">T=1000 原版</span></td><td class="num"><span data-k="trim_full.ap" data-f="2"></span><br><span class="muted">T=50 + 剪除</span></td><td class="num"><span data-k="trim_full.gain" data-f="2"></span></td><td><span data-k="trim_full.note"></span></td></tr>
+<tr><td><b>修正 cosine 排程</b></td><td>半監督 T=100（輕量）</td><td class="num"><span data-k="summary.schedulers_lite.semi.cosine-official.official_ap.mean" data-f="2"></span></td><td class="num"><span data-k="summary.schedulers_lite.semi.cosine-fixed.official_ap.mean" data-f="2"></span></td><td class="num pos">+7.0</td><td>修 bug 的必要結果；仍不如 linear</td></tr>
+<tr><td>同上</td><td>無監督 T=100（輕量）</td><td class="num"><span data-k="summary.schedulers_lite.unsup.cosine-official.official_roc.mean" data-f="2"></span><br><span class="muted">ROC</span></td><td class="num"><span data-k="summary.schedulers_lite.unsup.cosine-fixed.official_roc.mean" data-f="2"></span><br><span class="muted">ROC</span></td><td class="num pos">+3.5</td><td>AP 相同，ROC 明顯較好</td></tr>
+<tr><td><b>逐特徵正規化評分</b>：每個特徵、每個步驟的誤差除以訓練資料上的典型誤差</td><td>半監督 T=1000（輕量）</td><td class="num"><span data-k="summary.sweepT_lite.semi.official.ap.1000.mean" data-f="2"></span></td><td class="num"><span data-k="summary.sweepT_lite.semi.featnorm.ap.1000.mean" data-f="2"></span></td><td class="num pos">+3.5</td><td>降低對 T 的敏感度；在最佳 T 下無差別（完整協定 <span data-k="summary.variants.semi.featnorm_ap.mean" data-f="2"></span> vs <span data-k="summary.variants.semi.official_ap.mean" data-f="2"></span>）</td></tr>
+<tr><td>逐步驟正規化評分</td><td>無監督 T=1000（完整）</td><td class="num"><span data-k="summary.variants.unsup.official_roc.mean" data-f="2"></span><br><span class="muted">ROC</span></td><td class="num"><span data-k="summary.variants.unsup.stepnorm_roc.mean" data-f="2"></span><br><span class="muted">ROC</span></td><td class="num pos">+0.8</td><td>AP 不變，ROC 小幅改善，零成本</td></tr>
+<tr><td>5 個 seed 的模型集成</td><td>半監督 T=50（完整）</td><td class="num"><span data-k="summary.seed_ensemble_semi.single" data-f="2"></span></td><td class="num"><span data-k="summary.seed_ensemble_semi.ens" data-f="2"></span></td><td class="num pos">+0.2</td><td>方向一致（<span data-k="summary.seed_ensemble_semi.wins" data-f="0"></span> 勝 <span data-k="summary.seed_ensemble_semi.losses" data-f="0"></span> 負），但 5 倍成本換很小的增益</td></tr>
+<tr><td>多個 T 的排名集成（20 + 50）</td><td>半監督（輕量）</td><td class="num"><span data-k="multiT.semi.20.ap" data-f="2"></span></td><td class="num"><span data-k="multiT.semi.20_50.ap" data-f="2"></span></td><td class="num pos">+0.3</td><td>很小；無監督沒有任何組合勝過 T=1000</td></tr>
+<tr><td>與 kNN 的排名平均集成</td><td>半監督 / 無監督（完整）</td><td class="num"><span data-k="summary.variants.semi.official_ap.mean" data-f="2"></span> / <span data-k="summary.variants.unsup.official_ap.mean" data-f="2"></span></td><td class="num"><span data-k="summary.variants.semi.ens_rank_ap.mean" data-f="2"></span> / <span data-k="summary.variants.unsup.ens_rank_ap.mean" data-f="2"></span></td><td class="num neg">−</td><td>沒有幫助；半監督時兩者分數高度相關（ρ ≈ <span data-k="corr.semi_knn" data-f="2"></span>）</td></tr>
+</tbody></table></div>
+  <div class="figrow">
+    <figure><div id="var-semi"></div><figcaption>同一批已訓練模型，只改評分規則或與 kNN 做排名平均集成，不需重新訓練。</figcaption></figure>
+    <figure><div id="var-unsup"></div><figcaption>無監督。</figcaption></figure>
+  </div>
+  <h3>建議但尚未實驗的方向</h3>
+<ol class="tight">
+<li><b>永遠報告零訓練對照。</b>無監督設定下，‖x − μ‖²、對角或完整 Mahalanobis 距離、PCA 重建誤差應與新方法並列；本復現顯示它們足以解釋 DDAE 的無監督成績。</li>
+<li><b>把分數拆成「局部」與「全域」兩項並明確加權。</b>高噪聲步驟計算的其實是到均值距離（全域），低噪聲步驟計算的是流形上的局部重建誤差。與其靠 T 隱性控制兩者比例，不如直接計算 Mahalanobis 距離加上低噪聲重建誤差，並用一個權重控制，可解釋也省計算。</li>
+<li><b>不要把三分之一的訓練花在純雜訊上。</b>T=1000 線性排程有約 33% 的步驟 ᾱₜ &lt; 0.01，網路只學到輸出均值。可截斷排程（設定 ᾱ 下限）、對 t 做重要性抽樣，或把純雜訊項用封閉形式算出。</li>
+<li><b>以噪聲等級取代整數 t 作為條件。</b>官方的 4 維 sinusoidal 嵌入直接吃 1…T 的整數，頻率為 1 與 0.01 rad/step：前者每 6.3 步就繞一圈，後者在 T=50 時只變化 0.5 rad，條件訊號很弱。這與論文 Fig. 8「嵌入維度 0 與 4 一樣好」一致。改用 log-SNR 或 σₜ 作為輸入，並用 SNR 加權的損失，是擴散模型的標準做法。</li>
+<li><b>無標籤的超參數選擇。</b>論文以測試集結果挑 T、架構與嵌入維度。實務上可固定 T=50，只依「訓練資料是否乾淨」決定是否開啟污染穩健訓練；或以剪除前後的訓練重建誤差差距作為無標籤的選擇準則。</li>
+<li><b>類別特徵用離散擴散。</b>ADBench 的許多欄位是 0/1 或 one-hot，對它們加高斯雜訊沒有良好定義；作者在結論也提到這點。可對離散欄位改用 multinomial diffusion，連續欄位維持高斯。</li>
+<li><b>修正評估與釋出程式。</b>與基線使用同一資料協定與同一指標（AP），釋出 DDAE-C 程式碼，修正 cosine 後重跑 Fig. 7，並報告每個資料集的結果（arXiv 版缺附錄 E）。</li>
+</ol>
+</section>
+
+<section id="audit">
+  <div class="sec-head"><span class="secno">09</span><h2>程式稽核清單</h2></div>
+  <div class="tablewrap"><table><thead><tr><th>嚴重度</th><th>問題</th><th>位置 / 證據</th></tr></thead><tbody>
+<tr><td><span class="sev hi">高</span></td><td>cosine 排程把 ᾱₜ 當成 βₜ 回傳，ᾱₜ ≡ 0，輸入恆為純雜訊（第 04 節）。論文 Fig. 7 的 cosine 結論受此影響。</td><td><code>src/model.py:164-178</code></td></tr>
+<tr><td><span class="sev hi">高</span></td><td>論文第二個貢獻 DDAE-C（Eq. 7–8、Alg. 1）不在 repo 中，無法從官方程式重現 Table 1 的 DDAE-C。</td><td><code>src/model.py</code> 只有 <code>DDAE</code></td></tr>
+<tr><td><span class="sev mid">中</span></td><td>異常分數：程式為 Σₜ‖e‖₂（未平方、t=1…T−1），論文 Eq. 6 為 Σₜ‖e‖²。</td><td><code>src/model.py:324-333</code></td></tr>
+<tr><td><span class="sev mid">中</span></td><td>評估流程與論文宣稱的 DTE 流程不同：Scaler 擬合全部資料（含測試異常）、隨機切分、無監督沒有 bootstrap、無 50k 上限與小資料集重抽樣、CV/NLP 未做家族平均（第 06 節量化其影響）。</td><td><code>run.py:33-36</code>、<code>src/data.py</code></td></tr>
+<tr><td><span class="sev mid">中</span></td><td>T、層數、寬度、嵌入維度以 57 個資料集的測試結果做網格搜尋挑選；DTE 基線用原論文預設值。</td><td>論文 Sec. 4、App. A/B</td></tr>
+<tr><td><span class="sev mid">中</span></td><td><code>time_emb_type: learned</code> 直接拋 ValueError；改成 <code>learnable</code> 後推論時 dtype 錯誤崩潰（已實測）。</td><td><code>src/config.yaml:25</code>、<code>src/model.py:49-51</code></td></tr>
+<tr><td><span class="sev mid">中</span></td><td>論文寫 Glorot 初始化，程式為 PyTorch 預設；論文的「PR-AUC」與 DTE 基線使用的 AP 定義不同（程式列印的是梯形法）。</td><td>App. B；<code>src/utils.py:25-30</code></td></tr>
+<tr><td><span class="sev mid">中</span></td><td>DTE 公布的無監督基線無法以 DTE 公開程式碼重現（kNN 差 6 個 ROC 點）。</td><td><code>scripts/validate_knn.py</code></td></tr>
+<tr><td><span class="sev lo">低</span></td><td>缺 requirements.txt；README 的 config 與 notebook 路徑錯誤；沒有資料下載說明；<code>batch_size</code> 設定未被使用；<code>predict()</code> 未固定雜訊 seed 且大量 DeprecationWarning；<code>fit()</code> 以測試標籤監控。</td><td><code>README.md</code>、<code>src/config.yaml:8</code>、<code>src/model.py:301-333</code></td></tr>
+</tbody></table></div>
+<p class="col">完整清單與修正說明見 <code>AUDIT.md</code>；<code>official_patched/</code> 為修正後可直接執行的官方程式碼（新增 DDAE-C、論文版評分選項、正確的 cosine、Scaler 只擬合訓練集），<code>official_fixes.patch</code> 為對原 repo 的 diff。</p>
+</section>
+
+<section id="deliver">
+  <div class="sec-head"><span class="secno">10</span><h2>交付物與重跑方式</h2></div>
+  <div class="tablewrap"><table><thead><tr><th>路徑</th><th>內容</th></tr></thead><tbody>
+<tr><td><code>anoddae_repro/</code></td><td>復現套件：資料協定（dte / dte2 / repo）、DDAE / DDAE-C / DAE、可續跑的多行程執行器、彙總工具</td></tr>
+<tr><td><code>official_patched/</code>、<code>official_fixes.patch</code></td><td>修正後的官方程式碼與 diff</td></tr>
+<tr><td><code>AUDIT.md</code></td><td>程式 × 論文稽核清單（含行號）</td></tr>
+<tr><td><code>results/*.jsonl</code></td><td>每個（實驗、檔案、設定、seed）一行：AP / ROC / 梯形 PR-AUC、各種評分變體、訓練與評分時間</td></tr>
+<tr><td><code>results/scores/</code></td><td>逐樣本測試分數（npz），可離線做集成或其他分析</td></tr>
+<tr><td><code>results/summary/</code></td><td>Table 1 對照、逐資料集表（含 26 個 DTE 基線）、檢定、掃描結果</td></tr>
+<tr><td><code>reference/</code></td><td>從 DTE 論文附錄解析的 26 基線 × 57 資料集 AP / ROC 表</td></tr>
+<tr><td><code>scripts/queue*.sh</code></td><td>實際執行過的實驗佇列，依序執行即可完整重跑</td></tr>
+</tbody></table></div>
+<p class="col">重跑主實驗：<code>python -m anoddae_repro.runner --exp ddae_semi_T50 --setting semi --seeds 0 1 2 3 4 --protocol dte</code>，接著 <code>python scripts/summarize.py &amp;&amp; python scripts/build_report.py</code>。</p>
+</section>
+
+<section id="limits">
+  <div class="sec-head"><span class="secno">11</span><h2>限制</h2></div>
+  <ul class="tight">
+<li>只有 4 核 CPU、沒有 GPU。為了在合理時間內完成，無監督主實驗用 3 個 seed（論文 5 個），DDAE-C 用 2 個 seed，DAE 用 1 個 seed；T 與排程的掃描使用輕量協定（每個 CV/NLP 家族只取第一個檔案、每個資料集上限 10,000 筆、1 個 seed），只用來比較趨勢，數值不應與論文主表直接比。</li>
+<li>T=1000 的評分以 100 個等距步驟近似，第 05 節以同一批模型比較了完整 999 步的差異。</li>
+<li>論文沒有說明 DDAE-C 的 α、潛在層位置與正樣本配對方式，也沒有說明 DAE 的 σ。本復現的選擇寫在第 07 節；這些數字代表「依論文描述可得的版本」，不保證與作者未公開的程式相同。</li>
+<li>DTE 的無監督基線無法完全重現，本報告的無監督排名沿用其公布值，僅供參考。</li>
+<li>論文的逐資料集結果（22 頁 ACM 版附錄 E）不在 arXiv 版本中，因此只能比較 57 資料集平均。</li>
+</ul>
+</section>

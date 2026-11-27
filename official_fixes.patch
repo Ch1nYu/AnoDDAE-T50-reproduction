@@ -1,0 +1,263 @@
+diff -ruN '--exclude=__pycache__' '--exclude=ad_bench' '--exclude=.git' '--exclude=notebook' /home/user/sattarov/anoddae/README.md official_patched/README.md
+--- /home/user/sattarov/anoddae/README.md	2026-11-05 07:58:04.989634041 +0000
++++ official_patched/README.md	2026-11-05 08:48:00.699824090 +0000
+@@ -46,14 +46,23 @@
+ pip install -r requirements.txt
+ ```
+ 
++# Get the data
++The code expects ADBench `.npz` files in `ad_bench/` (see `data.path` in `src/config.yaml`):
++```bash
++mkdir -p ad_bench
++git clone --depth 1 --filter=blob:none --sparse https://github.com/Minqi824/ADBench adbench_src
++git -C adbench_src sparse-checkout set adbench/datasets/Classical
++cp adbench_src/adbench/datasets/Classical/*.npz ad_bench/
++```
++
+ # Run experiment
+ ```bash
+-python run.py --config configs/default.yaml
++python run.py --config src/config.yaml
+ ```
+ 
+ Try the interactive demo:
+ ```bash
+-jupyter notebook notebooks/method_demo.ipynb
++jupyter notebook notebook/demo.ipynb
+ ```
+ 
+ 
+diff -ruN '--exclude=__pycache__' '--exclude=ad_bench' '--exclude=.git' '--exclude=notebook' /home/user/sattarov/anoddae/requirements.txt official_patched/requirements.txt
+--- /home/user/sattarov/anoddae/requirements.txt	1970-01-01 00:00:00.000000000 +0000
++++ official_patched/requirements.txt	2026-11-05 08:48:00.699546053 +0000
+@@ -0,0 +1,5 @@
++torch>=2.2
++numpy
++scikit-learn
++pyyaml
++matplotlib
+diff -ruN '--exclude=__pycache__' '--exclude=ad_bench' '--exclude=.git' '--exclude=notebook' /home/user/sattarov/anoddae/run.py official_patched/run.py
+--- /home/user/sattarov/anoddae/run.py	2026-11-05 07:58:04.998445765 +0000
++++ official_patched/run.py	2026-11-05 08:48:00.699004542 +0000
+@@ -5,8 +5,9 @@
+ 
+ # from src.model import AnomalyDetector
+ from src.data import load_data, split_data
+-from src.utils import set_seed, normalize_data, evaluate_anomaly_detection, get_batch_size
+-from src.model import DDAE, DiffusionScheduler
++from sklearn.preprocessing import StandardScaler
++from src.utils import set_seed, evaluate_anomaly_detection, get_batch_size, get_device
++from src.model import DDAE
+ 
+ 
+ def parse_args():
+@@ -31,10 +32,13 @@
+ 
+     # Load data
+     X, y = load_data(config['data']['path'], config['data']['name'])
+-    # normalize data
+-    X = normalize_data(X)
+     # split data
+     x_train, x_test, y_train, y_test = split_data(X, y, train_setting=config['train']['setting'], random_state=seed)
++    # FIX: fit the scaler on the training split only (the released code standardised the full
++    # data set, i.e. also the test anomalies, before splitting)
++    if config['data'].get('normalize', True):
++        scaler = StandardScaler().fit(x_train)
++        x_train, x_test = scaler.transform(x_train), scaler.transform(x_test)
+ 
+     # convert to tensors
+     x_train = torch.tensor(x_train, dtype=torch.float32)
+@@ -57,8 +61,12 @@
+         batch_size=get_batch_size(X.shape[0]),
+         learning_rate=config['train']['lr'],
+         eval_epochs= config['train']['eval_epochs'],
++        device=get_device(),
++        contrastive_alpha=config['model'].get('contrastive_alpha', 0.0),
++        score_type=config['model'].get('score_type', 'l2'),
+         )
+     print("Batch size:", get_batch_size(X.shape[0]))
++    # test labels are passed for *monitoring only* (printed every eval_epochs)
+     model.fit(x_train, x_test, y_train, y_test)
+ 
+     # Predict anomaly scores
+diff -ruN '--exclude=__pycache__' '--exclude=ad_bench' '--exclude=.git' '--exclude=notebook' /home/user/sattarov/anoddae/src/config.yaml official_patched/src/config.yaml
+--- /home/user/sattarov/anoddae/src/config.yaml	2026-11-05 07:58:04.998445765 +0000
++++ official_patched/src/config.yaml	2026-11-05 08:48:00.699439142 +0000
+@@ -5,7 +5,7 @@
+   lr: 0.001
+   epochs: 100
+   eval_epochs: 10
+-  batch_size: 64
++  # batch_size is derived from the data size (closest power of 2 to |X|/10), see src/utils.py
+ 
+ data:
+   name: 17_InternetAds.npz
+@@ -15,11 +15,14 @@
+ model:
+   hidden_dim: [512, 512]
+   activation: lrelu # relu, lrelu, tanh, sigmoid
++  contrastive_alpha: 0.0 # > 0 enables DDAE-C (paper Eq. 8), e.g. 0.5
++  score_type: l2 # l2 = released code (sum_t ||e_t||), squared = paper Eq. 6
+ 
+ diffusion:
+   num_timesteps: 50
+   beta_start: 0.0001
+   beta_end: 0.02
+-  scheduler: linear # linear, cosine, quadratic, exponential, sigmoid
++  scheduler: linear # linear, cosine (fixed), quadratic, exponential, sigmoid
++  # paper: T=50 linear is best semi-supervised; larger T (500-1000) is best unsupervised
+   time_emb_dim: 4
+-  time_emb_type: sinusoidal # sinusoidal or learned
+\ No newline at end of file
++  time_emb_type: sinusoidal # sinusoidal or learnable ('learned' accepted)
+\ No newline at end of file
+diff -ruN '--exclude=__pycache__' '--exclude=ad_bench' '--exclude=.git' '--exclude=notebook' /home/user/sattarov/anoddae/src/model.py official_patched/src/model.py
+--- /home/user/sattarov/anoddae/src/model.py	2026-11-05 07:58:05.004133439 +0000
++++ official_patched/src/model.py	2026-11-05 08:47:38.191758884 +0000
+@@ -10,6 +10,8 @@
+     def __init__(self, input_dim, hidden_dims=[1024], time_emb_dim=16, activation='lrelu', time_emb_type='sinusoidal'):
+         super(DiffusionDenoiser, self).__init__()
+         # Timestep embedding: learnable or sinusoidal
++        if time_emb_type == 'learned':  # alias used in config.yaml
++            time_emb_type = 'learnable'
+         if time_emb_type == 'learnable':
+             self.timestep_embedding = nn.Linear(1, time_emb_dim)
+         elif time_emb_type == 'sinusoidal':
+@@ -47,15 +49,26 @@
+     def forward(self, x, t):
+         # Embed t
+         if self.time_emb_type == 'learnable':
+-            t = t.unsqueeze(1)  # Ensure t has shape (batch_size, 1)
++            t = t.float().unsqueeze(1)  # FIX: predict() passes int64 timesteps
+         t_embedded = self.timestep_embedding(t)  # Shape: (batch_size, embed_dim)
+         
+         # Concatenate x and embedded t
+         if self.time_emb_dim > 0:
+             x = torch.cat([x, t_embedded], dim=1)  # Shape: (batch_size, input_dim + embed_dim)
+ 
+-        # Pass through the network
+-        return self.network(x)  # Predict noise
++        # Pass through the network (predicts x0)
++        return self.network(x)
++
++    def encode(self, x, t):
++        """Latent z = output of the last hidden Linear layer (pre-activation)."""
++        if self.time_emb_type == 'learnable':
++            t = t.float().unsqueeze(1)
++        if self.time_emb_dim > 0:
++            x = torch.cat([x, self.timestep_embedding(t)], dim=1)
++        return self.network[:-2](x)
++
++    def decode(self, z):
++        return self.network[-2:](z)
+     
+     # define sinusodial time step embedding
+     def sine_cosine_transform_timesteps(self, timesteps, max_period=10000):
+@@ -172,10 +185,13 @@
+         Returns:
+             np.ndarray: Array of alpha_bar values for each timestep.
+         """
+-        steps = torch.arange(timesteps + 1)
++        steps = torch.arange(timesteps + 1, dtype=torch.float64)
+         f = lambda t: torch.cos((t / timesteps + s) / (1 + s) * torch.pi / 2) ** 2
+-        alphas_bar = f(steps) / f(torch.zeros(1))
+-        return alphas_bar[:-1]
++        alphas_bar = f(steps) / f(torch.zeros(1, dtype=torch.float64))
++        # FIX: the released code returned alphas_bar[:-1] *as betas*; beta_0 = 1 then makes
++        # alpha_bar_t = 0 for every t, i.e. the model only ever sees pure noise.
++        betas = 1 - alphas_bar[1:] / alphas_bar[:-1]
++        return betas.clamp(max=0.999).float()
+ 
+     def sigmoid_noise_schedule(self, timesteps, beta_start=0.0001, beta_end=0.02):
+         """
+@@ -236,6 +252,10 @@
+             learning_rate=1e-3,
+             device=None,
+             eval_epochs=None,
++            # DDAE-C (paper Sec. 3.4, Eq. 7-8); 0 = plain DDAE
++            contrastive_alpha=0.0,
++            # anomaly score: 'l2' = sum_t ||e_t|| (released code), 'squared' = paper Eq. 6
++            score_type='l2',
+         ):
+         self.input_dim = input_dim
+         self.T = num_timesteps
+@@ -244,6 +264,8 @@
+         self.batch_size = batch_size
+         self.learning_rate = learning_rate
+         self.eval_epochs = eval_epochs if eval_epochs is not None else epochs
++        self.contrastive_alpha = contrastive_alpha
++        self.score_type = score_type
+ 
+         # Denoiser network
+         self.denoiser = DiffusionDenoiser(
+@@ -263,7 +285,7 @@
+             scheduler=scheduler
+         )
+ 
+-    def fit(self, x_train, x_test, y_train=None, y_test=None):
++    def fit(self, x_train, x_test=None, y_train=None, y_test=None):
+         """
+         Fit the diffusion denoising autoencoder to the training data.
+         Args:
+@@ -283,10 +305,20 @@
+                 t = torch.randint(1, self.T, (batch_size,), device=self.device).long()
+                 # Forward process: Sample x_t and noise
+                 x_t, noise = self.scheduler.q_sample(x_0, t)
+-                # Predict noise
+-                x_0_hat = self.denoiser(x_t, t.float())
+-                # Loss: MSE between true noise and predicted noise
++                # Reconstruct x0 from x_t (DAE objective, paper Eq. 5)
++                z_t = self.denoiser.encode(x_t, t.float())
++                x_0_hat = self.denoiser.decode(z_t)
+                 loss = nn.MSELoss()(x_0_hat, x_0)
++                if self.contrastive_alpha > 0:
++                    # DDAE-C (Eq. 7-8, Alg. 1): positives (x0_i, x0_j) -> y=0, negatives (x0, x_t) -> y=1,
++                    # delta = ||z0 - zt||_2, margin m = 1 + t/T
++                    z_0 = self.denoiser.encode(x_0, t.float())
++                    z_0p = self.denoiser.encode(x_0[torch.randperm(batch_size, device=self.device)], t.float())
++                    d_pos = (z_0 - z_0p).norm(dim=1)
++                    d_neg = (z_0 - z_t).norm(dim=1)
++                    margin = 1.0 + t.float() / self.T
++                    loss_cont = torch.cat([d_pos ** 2, torch.relu(margin - d_neg) ** 2]).mean()
++                    loss = (1 - self.contrastive_alpha) * loss + self.contrastive_alpha * loss_cont
+                 total_loss += loss.item()
+                 optimizer.zero_grad()
+                 loss.backward()
+@@ -298,7 +330,8 @@
+             # exp_run_statistics['epoch'] = epoch + 1
+ 
+             # evaluate model
+-            if (epoch + 1) % self.eval_epochs == 0:
++            if x_test is not None and y_test is not None and (epoch + 1) % self.eval_epochs == 0:
++                # NOTE: monitoring only -- do not use these test metrics for model selection
+                 anomaly_scores = self.predict(x_test, y_test)
+                 metrics = evaluate_anomaly_detection(anomaly_scores, y_test)
+                 # metrics = {**exp_run_statistics, **metrics}
+@@ -329,7 +362,9 @@
+                     # x_t = torch.sqrt(alpha_bar_t) * x_batch + torch.sqrt(1 - alpha_bar_t) * torch.randn_like(x_batch)
+                     x_t, _ = self.scheduler.q_sample(x_batch, t_tensor)
+                     x_0_hat = self.denoiser(x_t, t_tensor)
+-                    scores = torch.norm(x_batch - x_0_hat, dim=1).cpu().numpy()
+-                    anomaly_scores[i:i + batch_size] += scores
++                    err = torch.norm(x_batch - x_0_hat, dim=1)
++                    if self.score_type == 'squared':
++                        err = err ** 2
++                    anomaly_scores[i:i + batch_size] += err.cpu()  # FIX: was numpy -> DeprecationWarning
+         return anomaly_scores
+ 
+diff -ruN '--exclude=__pycache__' '--exclude=ad_bench' '--exclude=.git' '--exclude=notebook' /home/user/sattarov/anoddae/src/utils.py official_patched/src/utils.py
+--- /home/user/sattarov/anoddae/src/utils.py	2026-11-05 07:58:05.004133439 +0000
++++ official_patched/src/utils.py	2026-11-05 08:47:38.191975906 +0000
+@@ -67,10 +67,10 @@
+ 
+ def get_batch_size(dataset_size):
+     """
+-    Get the effective batch size based on the dataset size and specified batch size.
++    Batch size = power of two in [2^3, 2^13] closest to dataset_size / 10 (paper App. B).
++    (config.yaml's train.batch_size is not used.)
+ 
+     Args:
+-        batch_size (int): The specified batch size.
+         dataset_size (int): The total number of samples in the dataset.
+ 
+     Returns:
